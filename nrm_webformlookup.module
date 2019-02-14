@@ -1,0 +1,119 @@
+<?php
+
+require_once 'nrm_webformlookup.variables.php';
+
+function nrm_webformlookup_form_alter(&$form, &$form_state, $form_id) {
+  $database = DRUPAL_DATABASE;
+  if (empty($form['#node'])) {
+    return;
+  }
+  civicrm_initialize();
+  $nid = $form['#node']->nid;
+  $config = CRM_Core_DAO::executeQuery("SELECT * FROM {$database}.webformlookup_config WHERE webform = {$nid}")->fetchAll()[0];
+  if (!empty($config)) {
+    $form['#validate'][] = 'nrm_webformlookup_validate_score_gpa';
+  }
+}
+
+function nrm_webformlookup_validate_score_gpa($form, &$form_state) {
+  civicrm_initialize();
+  $submitValues = $form_state['values']['submitted'];
+  if (!empty($submitValues['which_type_of_test_score_do_you_want_to_submit']) && $submitValues['which_type_of_test_score_do_you_want_to_submit'] == 'ACT') {
+    if (!empty($submitValues['GPA']) || !empty($submitValues['sat_score'])) {
+      form_set_error('which_type_of_test_score_do_you_want_to_submit','Please only choose ACT scores');
+    }
+  }
+  if (!empty($submitValues['which_type_of_test_score_do_you_want_to_submit']) && $submitValues['which_type_of_test_score_do_you_want_to_submit'] == 'SAT') {
+    if (!empty($submitValues['GPA_ACT']) || !empty($submitValues['act_score'])) {
+      form_set_error('which_type_of_test_score_do_you_want_to_submit','Please only choose SAT scores');
+    }
+  }
+}
+
+function nrm_webformlookup_webform_submission_insert($node, $submission) {
+  civicrm_initialize();
+  $database = DRUPAL_DATABASE;
+  $nid = $submission->nid;
+  $config = CRM_Core_DAO::executeQuery("SELECT * FROM {$database}.webformlookup_config WHERE webform = {$nid}")->fetchAll()[0];
+  if (!empty($config)) {
+    // We check the components for valid ones.
+    $validCids = [
+      'test_type' => TEST_TYPE,
+      'act_score' => ACT_SCORE,
+      'act_gpa' => ACT_GPA,
+      'sat_score' => SAT_SCORE,
+      'sat_gpa' => SAT_GPA,
+    ];
+    $params = [
+      'contact_id' => 2,
+      'contact_type' => 'Individual',
+    ];
+    foreach ($submission->data as $cid => $value) {
+      if (array_search($cid, $validCids)) {
+        // Test Type custom field
+        if ($cid == TEST_TYPE) {
+          $params['custom_' . $config['in1']] = $value[0];
+          $type = $value[0];
+        }
+        if (($cid == ACT_SCORE || $cid == SAT_SCORE) && !empty($value[0])) {
+          $params['custom_' . $config['in2']] = $score = $value[0];
+        }
+        if (($cid == ACT_GPA || $cid == SAT_GPA) && !empty($value[0])) {
+          $params['custom_' . $config['in3']] = $gpa = $value[0];
+          $gpa = $value[0];
+        }
+      }
+    }
+    
+    // Now, calculate the scholarship amounts.
+    $scoreQuery = getScoreQuery($type, $score);
+    $gpaQuery = getGpaQuery($type, $gpa);
+    if ($scoreQuery && $gpaQuery) {
+      $conv = CRM_Core_DAO::executeQuery("SELECT * FROM {$database}.webformlookup_conversion WHERE webform = {$nid} AND in1 = '$type' AND $scoreQuery AND $gpaQuery")->fetchAll()[0];
+      if (!empty($conv)) {
+        $params['custom_' . $config['out1']] = $conv['out1'];
+        $params['custom_' . $config['out2']] = $conv['out2'];
+      }
+    }
+    civicrm_api3('Contact', 'create', $params);
+  }
+}
+
+function getScoreQuery($type, $score) {
+  $scoreQuery = NULL;
+  if (strpos($score, '-') !== FALSE) {
+    $scores = explode('-', $score);
+    $scoreQuery = "in3_lte = $scores[1] AND in3_gt = $scores[0]";
+  }
+  elseif (strpos($score, '<') !== FALSE) {
+    $scores = explode('<', $score);
+    $scoreQuery = "in3_lte = $scores[1] AND in3_gt IS NULL";
+  }
+  elseif (strpos($score, '>=') !== FALSE) {
+    $scores = explode('>=', $score);
+    $scoreQuery = "in3_lte IS NULL AND in3_gt = $scores[1]";
+  }
+  else {
+    $scoreQuery = "in3_lte = $score AND in3_gt IS NULL";
+  }
+  if (empty($scoreQuery)) {
+    return FALSE;
+  }
+  return $scoreQuery;
+}
+
+function getGpaQuery($type, $gpa) {
+  $gpaQuery = NULL;
+  if (strpos($gpa, '-') !== FALSE) {
+    $scores = explode('-', $gpa);
+    $gpaQuery = "in2_lte = TRIM($scores[1]) AND in2_gt = TRIM($scores[0])";
+  }
+  elseif (strpos($gpa, '<') !== FALSE) {
+    $scores = explode('<', $gpa);
+    $gpaQuery = "in2_lte = TRIM($scores[1]) AND in2_gt IS NULL";
+  }
+  if (empty($gpaQuery)) {
+    return FALSE;
+  }
+  return $gpaQuery;
+}
