@@ -9,6 +9,9 @@ function nrm_webformlookup_form_alter(&$form, &$form_state, $form_id) {
   }
   civicrm_initialize();
   $nid = $form['#node']->nid;
+  if (!$nid) {
+    return;
+  }
   $config = CRM_Core_DAO::executeQuery("SELECT * FROM {$database}.webformlookup_config WHERE webform = {$nid}")->fetchAll()[0];
   if (!empty($config)) {
     $form['#validate'][] = 'nrm_webformlookup_validate_score_gpa';
@@ -44,8 +47,15 @@ function nrm_webformlookup_webform_submission_insert($node, $submission) {
       'sat_score' => SAT_SCORE,
       'sat_gpa' => SAT_GPA,
     ];
+    if (module_exists('purlifier')) { 
+      $purl = purlifier_getPURL();
+      $loContact = purlifier_getContactInfo($purl);
+    }
+    if (empty($loContact['id'])) {
+      return;
+    }
     $params = [
-      'contact_id' => 2,
+      'contact_id' => $loContact['id'],
       'contact_type' => 'Individual',
     ];
     foreach ($submission->data as $cid => $value) {
